@@ -3,12 +3,14 @@
 Pixels are captured from the host display via mss. The display is the
 real screen (locally) or the Xvfb virtual display (in the container).
 The application's 128x128 window is the only thing rendered on that
-display in either case, so we capture the full frame and count pixels
-matching colour predicates with vectorised numpy operations.
+display in either case, so we capture the full frame and either count
+pixels matching colour predicates or run OCR on the full frame.
 """
 
 import mss
 import numpy as np
+import pytesseract
+from PIL import Image
 
 
 def capture_display() -> np.ndarray:
@@ -21,6 +23,22 @@ def capture_display() -> np.ndarray:
         monitor = sct.monitors[1]  # index 0 is "all monitors", 1 is primary
         raw = sct.grab(monitor)
         return np.array(raw)
+
+
+def read_digits(image: np.ndarray) -> str:
+    """Run OCR on the captured frame and return whatever digits it sees.
+
+    Uses Tesseract in single-line mode with a digits-only character
+    whitelist, since the application only ever renders two zero-padded
+    digits in the OK state.
+    """
+    rgb = image[:, :, [2, 1, 0]]  # BGRA -> RGB
+    pil_image = Image.fromarray(rgb)
+    text = pytesseract.image_to_string(
+        pil_image,
+        config="--psm 7 -c tessedit_char_whitelist=0123456789",
+    )
+    return text.strip()
 
 
 def count_red_pixels(image: np.ndarray, dominance: int = 80) -> int:

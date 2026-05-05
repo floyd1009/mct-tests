@@ -14,26 +14,39 @@ from tests.helpers.screen_capture import (
     capture_display,
     count_red_pixels,
     count_white_pixels,
+    read_digits,
 )
 from tests.test_failure_display import EXPECTED_RED_PIXELS_MIN
 
 
-@pytest.mark.parametrize("speed", [0, 1, 42, 99, 100, 142, 255])
-def test_speed_renders_white_digits_for_full_input_range(running_app, speed):
-    """Speed values across the full byte range must render white digits.
+@pytest.mark.parametrize(
+    "speed,expected",
+    [
+        (0, "00"),
+        (1, "01"),
+        (42, "42"),
+        (99, "99"),
+        (100, "00"),
+        (142, "42"),
+        (255, "55"),
+    ],
+)
+def test_speed_renders_correct_digits_after_modulo_100(running_app, speed, expected):
+    """Speed values across the full byte range must render the byte modulo 100.
 
-    The application takes the speed byte modulo 100 before rendering, so
-    142 displays as "42" and 100 displays as "00". This test does not
-    assert which digits are drawn (that would require OCR), only that
-    the OK rendering path is exercised end to end.
+    The application formats `byte[0] % 100` as zero-padded two-digit
+    text, so 100 displays as "00", 142 as "42", 255 as "55", etc.
+    OCR confirms the exact rendered digits, not just that something
+    was drawn.
     """
     udp_sender.send(speed=speed, failure=False)
     settle()
 
     image = capture_display()
-    white_pixels = count_white_pixels(image)
 
-    assert white_pixels > 50, f"speed={speed} produced no visible digits"
+    assert read_digits(image) == expected, (
+        f"speed={speed} expected to render {expected!r}, got {read_digits(image)!r}"
+    )
 
 
 @pytest.mark.parametrize("flag_byte", [0x01, 0x05, 0x80, 0xFF])
@@ -58,11 +71,11 @@ def test_state_recovers_from_failure_to_ok(running_app):
     settle()
 
     image = capture_display()
-    white_pixels = count_white_pixels(image)
-    red_pixels = count_red_pixels(image)
 
-    assert white_pixels > 100, "OK state did not restore after failure"
-    assert red_pixels == 0, "failure box still visible after OK packet"
+    assert read_digits(image) == "42", (
+        f"expected the digits to read '42' after recovery, got {read_digits(image)!r}"
+    )
+    assert count_red_pixels(image) == 0, "failure box still visible after OK packet"
 
 
 def test_short_payload_is_ignored(running_app):

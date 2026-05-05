@@ -55,19 +55,18 @@ rendered pixels on the host display.
 | `pytest`            | Fixtures, parametrisation, markers, plugin ecosystem.               |
 | `mss`               | Cross-platform screen capture. Works under Xvfb in the container and against the real display locally. |
 | `numpy`             | Vectorised pixel-region operations are an order of magnitude faster than per-pixel Python loops. |
+| `pytesseract` + Tesseract | Reading the rendered speed value off the screen. Tesseract is configured for single-line, digits-only output, which is reliable on the application's bold 44pt font. |
+| `Pillow`            | Image format conversion between mss output and Tesseract input.    |
 | Standard library `socket` and `subprocess` | Sending UDP packets is two lines. Spawning the application is two lines. No wrapper library needed. |
 | `Xvfb` (system)     | Provides a virtual X display in the container so the application has somewhere to render headlessly. |
 
-OCR was considered for verifying that the digits read "42" but rejected.
-`pytesseract` adds a heavy native dependency, slows the suite, and is
-flaky on small bold fonts. Pixel sampling against colour predicates is
-deterministic and fast. The trade-off is that the suite asserts the OK
-state was rendered, not that the specific digits "4" and "2" appear.
-Given that the application draws digits via `QPainter.drawText` with a
-single code path, this is acceptable for the contract under test. If
-digit-level verification ever becomes a hard requirement, an OCR-based
-test can be added behind a `@pytest.mark.slow` marker without changing
-the rest of the suite.
+Two complementary verification methods are used. OCR via Tesseract
+reads the actual digits in the OK state, so a test for "speed 42"
+fails if the application renders "00", not just if it fails to render
+anything. Pixel-region predicates (`count_red_pixels`,
+`count_white_pixels`) are used for the failure state, where a colour
+signature is the primary signal, and as cheap sanity checks that no
+red box is drawn during the OK path.
 
 ### Q1.2 Structure for growth
 
@@ -147,11 +146,14 @@ overhead per test.
 
 ### Verification
 
-Pixel sampling instead of OCR or image diff. Two predicates do most of
-the work: `count_white_pixels` and `count_red_pixels`. Region
-selection is implicit because the only thing rendered on the virtual
-display is the application's window, so counts are taken across the
-full captured frame and compared against thresholds chosen with margin.
+Two complementary methods. For the OK state, OCR reads the actual
+digits via `read_digits()` and the test asserts the exact two-character
+string. This is what makes a test like "speed 42" actually require
+the rendered output to be "42" and not just "anything white". For the
+failure state, `count_red_pixels()` measures how much of the captured
+frame is red-dominant, since a colour signature is the natural way to
+identify a filled red box and is robust to anti-aliasing on the black
+X drawn through it.
 
 ### Timing
 

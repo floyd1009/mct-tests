@@ -5,7 +5,7 @@ from tests.helpers import udp_sender
 from tests.helpers.screen_capture import (
     capture_display,
     count_red_pixels,
-    count_white_pixels,
+    read_digits,
 )
 
 
@@ -16,12 +16,9 @@ def test_speed_42_renders_two_digits(running_app):
 
     image = capture_display()
 
-    white_pixels = count_white_pixels(image)
-    red_pixels = count_red_pixels(image)
-
-    assert white_pixels > 100, (
-        f"expected white digit pixels on screen, got {white_pixels}"
+    assert read_digits(image) == "42", (
+        f"expected the rendered digits to read '42', got {read_digits(image)!r}"
     )
-    assert red_pixels == 0, (
-        f"red pixels found in OK state; failure box must not be drawn ({red_pixels} red pixels)"
+    assert count_red_pixels(image) == 0, (
+        "red pixels found in OK state; failure box must not be drawn"
     )
