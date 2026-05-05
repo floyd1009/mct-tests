@@ -8,20 +8,18 @@ ranges, and explicit transitions between the two visual states.
 
 import pytest
 
-from tests.conftest import pump
+from tests.conftest import settle
 from tests.helpers import udp_sender
 from tests.helpers.screen_capture import (
-    count_matching,
-    grab,
-    is_red,
-    is_white,
+    capture_display,
+    count_red_pixels,
+    count_white_pixels,
 )
-from tests.test_failure_display import FAILURE_BOX_AREA, FAILURE_BOX_REGION
-from tests.test_speed_display import DIGIT_REGION
+from tests.test_failure_display import EXPECTED_RED_PIXELS_MIN
 
 
 @pytest.mark.parametrize("speed", [0, 1, 42, 99, 100, 142, 255])
-def test_speed_renders_white_digits_for_full_input_range(qapp, speed_window, speed):
+def test_speed_renders_white_digits_for_full_input_range(running_app, speed):
     """Speed values across the full byte range must render white digits.
 
     The application takes the speed byte modulo 100 before rendering, so
@@ -30,51 +28,51 @@ def test_speed_renders_white_digits_for_full_input_range(qapp, speed_window, spe
     the OK rendering path is exercised end to end.
     """
     udp_sender.send(speed=speed, failure=False)
-    pump(qapp)
+    settle()
 
-    image = grab(speed_window)
-    white_pixels = count_matching(image, DIGIT_REGION, is_white)
+    image = capture_display()
+    white_pixels = count_white_pixels(image)
 
     assert white_pixels > 50, f"speed={speed} produced no visible digits"
 
 
 @pytest.mark.parametrize("flag_byte", [0x01, 0x05, 0x80, 0xFF])
-def test_any_nonzero_failure_byte_triggers_failure_state(qapp, speed_window, flag_byte):
+def test_any_nonzero_failure_byte_triggers_failure_state(running_app, flag_byte):
     """Per the contract, byte[1] != 0 means failure, regardless of value."""
     udp_sender.send_raw(bytes((0x2A, flag_byte)))
-    pump(qapp)
+    settle()
 
-    image = grab(speed_window)
-    red_pixels = count_matching(image, FAILURE_BOX_REGION, is_red)
+    image = capture_display()
+    red_pixels = count_red_pixels(image)
 
-    assert red_pixels > FAILURE_BOX_AREA * 0.6, (
+    assert red_pixels > EXPECTED_RED_PIXELS_MIN, (
         f"failure flag 0x{flag_byte:02X} did not trigger the red box"
     )
 
 
-def test_state_recovers_from_failure_to_ok(qapp, speed_window):
+def test_state_recovers_from_failure_to_ok(running_app):
     """After a failure packet, a subsequent OK packet must restore the digits."""
     udp_sender.send(speed=42, failure=True)
-    pump(qapp)
+    settle()
     udp_sender.send(speed=42, failure=False)
-    pump(qapp)
+    settle()
 
-    image = grab(speed_window)
-    white_pixels = count_matching(image, DIGIT_REGION, is_white)
-    red_pixels = count_matching(image, FAILURE_BOX_REGION, is_red)
+    image = capture_display()
+    white_pixels = count_white_pixels(image)
+    red_pixels = count_red_pixels(image)
 
     assert white_pixels > 100, "OK state did not restore after failure"
     assert red_pixels == 0, "failure box still visible after OK packet"
 
 
-def test_short_payload_is_ignored(qapp, speed_window):
+def test_short_payload_is_ignored(running_app):
     """Payloads shorter than 2 bytes must not change the display."""
     # The window starts in the OK state with speed=0. A 1-byte payload
     # must not crash the app or change the rendered output.
     udp_sender.send_raw(bytes((0x2A,)))
-    pump(qapp)
+    settle()
 
-    image = grab(speed_window)
-    red_pixels = count_matching(image, FAILURE_BOX_REGION, is_red)
+    image = capture_display()
+    red_pixels = count_red_pixels(image)
 
     assert red_pixels == 0, "short payload incorrectly triggered failure state"

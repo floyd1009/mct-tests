@@ -1,16 +1,35 @@
 FROM python:3.12-slim
 
-# Qt's offscreen platform plugin still needs a small set of system
-# libraries to load, even though it never opens a display. These are
-# the minimum required for PySide6 widgets to render to memory.
+# System libraries:
+#   - Xvfb provides a virtual X display so the application has somewhere
+#     to render. The test process captures pixels from this display.
+#   - The libxcb-* and libxkbcommon-x11-0 packages are Qt's runtime
+#     dependencies for the xcb platform plugin.
+#   - libgssapi-krb5-2 is loaded dynamically by Qt's network module.
+#   - The remaining libraries are baseline OpenGL, fonts, and DBus.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    xauth \
     libgl1 \
     libegl1 \
     libglib2.0-0 \
-    libxkbcommon0 \
     libdbus-1-3 \
     libfontconfig1 \
     libfreetype6 \
+    libgssapi-krb5-2 \
+    libxkbcommon0 \
+    libxkbcommon-x11-0 \
+    libxcb-cursor0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-render-util0 \
+    libxcb-shape0 \
+    libxcb-sync1 \
+    libxcb-xfixes0 \
+    libxcb-xkb1 \
+    libx11-xcb1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
@@ -22,9 +41,7 @@ COPY app/ ./app/
 COPY tests/ ./tests/
 COPY pytest.ini .
 
-# Render Qt widgets to memory instead of a display server. This is the
-# simplest way to run GUI tests in CI; an alternative is xvfb-run, which
-# spawns a virtual X server.
-ENV QT_QPA_PLATFORM=offscreen
-
-CMD ["pytest"]
+# Run pytest under xvfb-run so the application has a virtual X display
+# to render into. The screen size is set generously so the 128x128
+# window is rendered with margin to spare.
+CMD ["xvfb-run", "-a", "--server-args=-screen 0 400x400x24", "pytest"]

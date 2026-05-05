@@ -1,56 +1,46 @@
-"""Grab a widget's rendered output and inspect pixel regions.
+"""Screen capture helpers.
 
-We deliberately avoid OCR. The application has only two visual states
-(centered digits, or red square with a black X), and both can be verified
-by counting pixels matching a colour predicate in a region of interest.
-This is faster than OCR, has no native dependencies, and is deterministic.
+Pixels are captured from the host display via mss. The display is the
+real screen (locally) or the Xvfb virtual display (in the container).
+The application's 128x128 window is the only thing rendered on that
+display in either case, so we capture the full frame and count pixels
+matching colour predicates with vectorised numpy operations.
 """
 
-from typing import Callable, Tuple
-
-from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QWidget
+import mss
+import numpy as np
 
 
-Region = Tuple[int, int, int, int]  # (x, y, width, height)
-Rgb = Tuple[int, int, int]
-Predicate = Callable[[Rgb], bool]
+def capture_display() -> np.ndarray:
+    """Capture the full primary display.
 
-
-def grab(widget: QWidget) -> QImage:
-    """Render the widget into a QImage."""
-    widget.repaint()
-    return widget.grab().toImage()
-
-
-def count_matching(image: QImage, region: Region, predicate: Predicate) -> int:
-    """Count pixels in `region` whose colour matches `predicate`."""
-    x, y, w, h = region
-    count = 0
-    for j in range(y, y + h):
-        for i in range(x, x + w):
-            color = image.pixelColor(i, j)
-            if predicate((color.red(), color.green(), color.blue())):
-                count += 1
-    return count
-
-
-def is_white(rgb: Rgb, threshold: int = 200) -> bool:
-    r, g, b = rgb
-    return r >= threshold and g >= threshold and b >= threshold
-
-
-def is_red(rgb: Rgb, dominance: int = 100) -> bool:
-    """True for clearly red-dominant pixels.
-
-    `dominance` is the minimum gap between the red channel and each of
-    green and blue. This rejects washed-out reds and pure black pixels
-    from the failure-state X.
+    Returns a numpy array of shape (height, width, 4) in BGRA order,
+    matching what mss returns directly.
     """
-    r, g, b = rgb
-    return r >= 150 and (r - g) >= dominance and (r - b) >= dominance
+    with mss.MSS() as sct:
+        monitor = sct.monitors[1]  # index 0 is "all monitors", 1 is primary
+        raw = sct.grab(monitor)
+        return np.array(raw)
 
 
-def is_black(rgb: Rgb, threshold: int = 40) -> bool:
-    r, g, b = rgb
-    return r <= threshold and g <= threshold and b <= threshold
+def count_red_pixels(image: np.ndarray, dominance: int = 80) -> int:
+    """Count red-dominant pixels in the image.
+
+    A pixel counts as red when the red channel is high and clearly
+    exceeds both green and blue by `dominance`. This rejects the black
+    pixels of the failure-state X drawn through the red box.
+    """
+    b = image[:, :, 0].astype(int)
+    g = image[:, :, 1].astype(int)
+    r = image[:, :, 2].astype(int)
+    mask = (r >= 150) & ((r - g) >= dominance) & ((r - b) >= dominance)
+    return int(mask.sum())
+
+
+def count_white_pixels(image: np.ndarray, threshold: int = 200) -> int:
+    """Count near-white pixels in the image."""
+    b = image[:, :, 0]
+    g = image[:, :, 1]
+    r = image[:, :, 2]
+    mask = (r >= threshold) & (g >= threshold) & (b >= threshold)
+    return int(mask.sum())

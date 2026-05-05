@@ -1,65 +1,62 @@
 """Shared pytest fixtures.
 
-Design notes:
+The application under test is treated as a true black box: it runs in
+its own subprocess, the test process never imports it, and verification
+happens by capturing pixels from the host display rather than reading
+widget state.
 
-* The application is treated as a black box. We import the SpeedWindow
-  class only to instantiate it inside the test process; we never call its
-  internal methods or read private state. The contract under test is
-  "UDP packets in, rendered pixels out".
-
-* QApplication is session-scoped. Qt does not allow more than one
-  QApplication per process, and recreating it between tests is slow and
-  fragile.
-
-* SpeedWindow is function-scoped. Each test gets a fresh instance so
-  state from one test cannot leak into another. The UDP socket bound to
-  port 3000 is closed on teardown to free the port for the next test.
-
-* `pump` waits for queued Qt events (UDP datagram delivery, paint events)
-  to be processed. It is bounded by a timeout so a misbehaving test
-  cannot hang the suite.
+Inputs go in over UDP. Outputs are read off the screen. Nothing else.
 """
 
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
-# Make the SUT importable without modifying the app/ folder.
-APP_DIR = Path(__file__).resolve().parent.parent / "app"
-sys.path.insert(0, str(APP_DIR))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+APP_PATH = REPO_ROOT / "app" / "main.py"
 
-from main import SpeedWindow  # noqa: E402
+# Time to wait for the app's window to appear after spawning the process.
+# Generous because Qt initialisation includes platform plugin loading
+# and font cache warmup on a cold container.
+WINDOW_APPEAR_SECONDS = 1.5
 
-
-@pytest.fixture(scope="session")
-def qapp():
-    app = QApplication.instance() or QApplication(sys.argv)
-    yield app
+# Time to wait between sending a UDP packet and capturing pixels, so the
+# datagram is delivered, the readyRead signal fires, and the paint event
+# completes.
+PAINT_SETTLE_SECONDS = 0.5
 
 
 @pytest.fixture
-def speed_window(qapp):
-    window = SpeedWindow()
-    window.show()
-    qapp.processEvents()
-    yield window
-    window.socket.close()
-    window.close()
-    window.deleteLater()
-    qapp.processEvents()
+def running_app():
+    """Launch app/main.py as a subprocess for the duration of one test."""
+    env = os.environ.copy()
+    proc = subprocess.Popen(
+        [sys.executable, str(APP_PATH)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(WINDOW_APPEAR_SECONDS)
+
+    if proc.poll() is not None:
+        raise RuntimeError(
+            f"application process exited prematurely with code {proc.returncode}"
+        )
+
+    yield proc
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
-def pump(qapp, milliseconds: int = 200) -> None:
-    """Process pending Qt events for up to `milliseconds`.
-
-    UDP delivery on localhost is fast but not synchronous from the
-    sender's perspective. A short pump window lets the readyRead signal
-    fire and the paint event run before we sample pixels.
-    """
-    deadline = time.monotonic() + milliseconds / 1000.0
-    while time.monotonic() < deadline:
-        qapp.processEvents()
-        time.sleep(0.005)
+def settle():
+    """Wait for the app to process the most recent UDP packet and repaint."""
+    time.sleep(PAINT_SETTLE_SECONDS)
